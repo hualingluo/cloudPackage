@@ -1,3 +1,4 @@
+
 {
   "nodes": {
     "start": {
@@ -5,7 +6,7 @@
       "title": "序章：苏醒",
       "type": "scene",
       "content": "你在一个冷冻舱中醒来。警报声在耳边回荡，空气中弥漫着臭氧和铁锈的味道。控制台闪烁着微弱的红光，你什么都想不起来。",
-      "mediaType": "none",
+      "mediaType": "video",
       "mediaSrc": "http://gossv-vcg.cfp.cn/videos/mts_videos/medium/VCG2236092253.mp4",
       "audioSrc": "",
       "x": 100,
@@ -28,7 +29,7 @@
       "title": "系统日志",
       "type": "decision",
       "content": "控制台屏幕闪烁不定。上面显示着 '致命错误：船体破损'。你发现了一段未发送的求救信号。",
-      "mediaType": "none",
+      "mediaType": "video",
       "mediaSrc": "http://gossv-vcg.cfp.cn/videos/mts_videos/medium/VCG2230515285.mp4",
       "audioSrc": "",
       "x": 500,
@@ -40,7 +41,7 @@
       "title": "黑暗走廊",
       "type": "scene",
       "content": "舱门在火花中滑开。走廊一片漆黑，远处的应急灯忽明忽暗，仿佛有什么东西在阴影中移动。",
-      "mediaType": "none",
+      "mediaType": "video",
       "mediaSrc": "http://gossv-vcg.cfp.cn/videos/mts_videos/medium/VCG2230515285.mp4",
       "audioSrc": "",
       "x": 500,
