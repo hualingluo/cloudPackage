@@ -29,19 +29,19 @@ jobs:
       - name: 4. 注入智能播放器引擎与数据
         shell: pwsh
         run: |
-          # 准备 assets 目录
-          $assetsDir = "player_app/assets"
-          if (!(Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir }
+          # 创建 assets 目录
+          $assetsPath = "player_app/assets"
+          if (!(Test-Path $assetsPath)) { New-Item -ItemType Directory -Path $assetsPath }
           
-          # 拷贝配置文件
+          # 拷贝配置文件（优先选择 project.json）
           if (Test-Path "project.json") {
-              Copy-Item "project.json" -Destination "player_app/assets/movie_config.json"
+              Copy-Item "project.json" -Destination "player_app/assets/movie_config.json" -Force
           } else {
-              Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json"
+              Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json" -Force
           }
           
-          # 编写 Dart 源码
-          $dartCode = @"
+          # 使用单引号 Here-String (@' '@) 避免 $ 符号被 PowerShell 解析
+          $dartCode = @'
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -100,7 +100,7 @@ class _MoviePlayerState extends State<MoviePlayer> {
       });
       _setupMedia();
     } catch (e) {
-      debugPrint("数据加载失败: \$e");
+      debugPrint("Data Load Error: $e");
     }
   }
 
@@ -116,8 +116,8 @@ class _MoviePlayerState extends State<MoviePlayer> {
     final String mediaSrc = node['mediaSrc'] ?? '';
     final String mediaType = node['mediaType'] ?? 'none';
     
-    // 智能识别视频：后缀为 .mp4 或 mediaType 为 video
-    bool shouldPlayVideo = mediaType == 'video' || mediaSrc.toLowerCase().contains('.mp4');
+    // 智能识别视频逻辑
+    bool shouldPlayVideo = (mediaType == 'video') || (mediaSrc.toLowerCase().contains('.mp4'));
 
     if (shouldPlayVideo && mediaSrc.isNotEmpty) {
       _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
@@ -128,7 +128,7 @@ class _MoviePlayerState extends State<MoviePlayer> {
         await _videoController!.setVolume(1.0);
         setState(() { _isInitialized = true; });
       } catch (e) {
-        debugPrint("视频初始化异常: \$e");
+        debugPrint("Video Init Error: $e");
       }
     } else {
       setState(() {});
@@ -149,18 +149,13 @@ class _MoviePlayerState extends State<MoviePlayer> {
     final nodes = project!['nodes'] as Map<String, dynamic>?;
     final node = nodes?[currentId];
     
-    if (node == null) return const Scaffold(body: Center(child: Text('剧情结束')));
+    if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 背景媒体层
-          Positioned.fill(
-            child: _buildMediaBackground(node),
-          ),
-          
-          // 渐变蒙版
+          Positioned.fill(child: _buildMediaBackground(node)),
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -172,8 +167,6 @@ class _MoviePlayerState extends State<MoviePlayer> {
               ),
             ),
           ),
-
-          // 文本内容与选项层
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -218,7 +211,6 @@ class _MoviePlayerState extends State<MoviePlayer> {
 
   Widget _buildMediaBackground(Map<String, dynamic> node) {
     final mediaSrc = node['mediaSrc'];
-
     if (_videoController != null && _isInitialized) {
       return SizedBox.expand(
         child: FittedBox(
@@ -231,25 +223,25 @@ class _MoviePlayerState extends State<MoviePlayer> {
         ),
       );
     } else if (mediaSrc != null && mediaSrc != "") {
-      return Image.network(
-        mediaSrc, 
-        fit: BoxFit.cover, 
-        errorBuilder: (c, e, s) => Container(color: Colors.grey[900])
-      );
+      return Image.network(mediaSrc, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.black));
     }
     return Container(color: Colors.black);
   }
 }
-"@
-          $dartCode | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
+'@
+          # 写入 main.dart 且确保目录正确
+          $dartPath = "player_app/lib/main.dart"
+          Set-Content -Path $dartPath -Value $dartCode -Encoding utf8
 
       - name: 5. 注册资源与依赖
         shell: pwsh
         run: |
           cd player_app
           flutter pub add video_player
-          # 在 pubspec.yaml 中注册资源文件
-          (Get-Content pubspec.yaml) -replace '# assets:', "assets:`n    - assets/movie_config.json" | Set-Content pubspec.yaml
+          # 在 pubspec.yaml 中注入 assets 声明
+          $content = Get-Content pubspec.yaml
+          $newContent = $content -replace '# assets:', "assets:`n    - assets/movie_config.json"
+          Set-Content pubspec.yaml $newContent
 
       - name: 6. 编译 Release EXE
         run: |
@@ -257,7 +249,7 @@ class _MoviePlayerState extends State<MoviePlayer> {
           flutter pub get
           flutter build windows --release
 
-      - name: 7. 整理并压缩产物
+      - name: 7. 整理并打包产物
         shell: pwsh
         run: |
           if (Test-Path "output") { Remove-Item -Recurse -Force "output" }
@@ -265,7 +257,7 @@ class _MoviePlayerState extends State<MoviePlayer> {
           Copy-Item "player_app/build/windows/x64/runner/Release/*" -Destination "output/" -Recurse
           Compress-Archive -Path "output/*" -DestinationPath "Douju_Player_Windows.zip" -Force
 
-      - name: 8. 上传打包文件 (Artifacts)
+      - name: 8. 上传 Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Douju-Flutter-EXE-Build
