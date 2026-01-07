@@ -29,216 +29,214 @@ jobs:
       - name: 4. 注入智能播放器引擎与数据
         shell: pwsh
         run: |
-          # 创建 assets 目录
+          # 确保 assets 目录存在
           $assetsPath = "player_app/assets"
           if (!(Test-Path $assetsPath)) { New-Item -ItemType Directory -Path $assetsPath }
           
-          # 拷贝配置文件（优先选择 project.json）
+          # 拷贝配置文件
           if (Test-Path "project.json") {
               Copy-Item "project.json" -Destination "player_app/assets/movie_config.json" -Force
           } else {
               Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json" -Force
           }
           
-          # 使用单引号 Here-String (@' '@) 避免 $ 符号被 PowerShell 解析
+          # 写入 Dart 源码。注意：这里的代码每一行都必须相对于 run: | 进行缩进。
           $dartCode = @'
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
+          import 'dart:convert';
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:video_player/video_player.dart';
 
-void main() => runApp(const MovieApp());
+          void main() => runApp(const MovieApp());
 
-class MovieApp extends StatelessWidget {
-  const MovieApp({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Douju Player',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primaryColor: Colors.cyan,
-        useMaterial3: true,
-      ),
-      home: const MoviePlayer(),
-    );
-  }
-}
-
-class MoviePlayer extends StatefulWidget {
-  const MoviePlayer({super.key});
-  @override
-  State<MoviePlayer> createState() => _MoviePlayerState();
-}
-
-class _MoviePlayerState extends State<MoviePlayer> {
-  Map<String, dynamic>? project;
-  String? currentId;
-  VideoPlayerController? _videoController;
-  bool _isInitialized = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProject();
-  }
-
-  @override
-  void dispose() {
-    _videoController?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadProject() async {
-    try {
-      final String response = await rootBundle.loadString('assets/movie_config.json');
-      final data = await json.decode(response);
-      setState(() {
-        project = data;
-        currentId = 'start';
-      });
-      _setupMedia();
-    } catch (e) {
-      debugPrint("Data Load Error: $e");
-    }
-  }
-
-  void _setupMedia() async {
-    final nodes = project?['nodes'] as Map<String, dynamic>?;
-    final node = nodes?[currentId];
-    if (node == null) return;
-
-    setState(() { _isInitialized = false; });
-    await _videoController?.dispose();
-    _videoController = null;
-
-    final String mediaSrc = node['mediaSrc'] ?? '';
-    final String mediaType = node['mediaType'] ?? 'none';
-    
-    // 智能识别视频逻辑
-    bool shouldPlayVideo = (mediaType == 'video') || (mediaSrc.toLowerCase().contains('.mp4'));
-
-    if (shouldPlayVideo && mediaSrc.isNotEmpty) {
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
-      try {
-        await _videoController!.initialize();
-        await _videoController!.setLooping(true);
-        await _videoController!.play();
-        await _videoController!.setVolume(1.0);
-        setState(() { _isInitialized = true; });
-      } catch (e) {
-        debugPrint("Video Init Error: $e");
-      }
-    } else {
-      setState(() {});
-    }
-  }
-
-  void _onOptionPressed(String targetId) {
-    setState(() {
-      currentId = targetId;
-    });
-    _setupMedia();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    
-    final nodes = project!['nodes'] as Map<String, dynamic>?;
-    final node = nodes?[currentId];
-    
-    if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Positioned.fill(child: _buildMediaBackground(node)),
-          Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+          class MovieApp extends StatelessWidget {
+            const MovieApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Douju Player',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  brightness: Brightness.dark,
+                  primaryColor: Colors.cyan,
+                  useMaterial3: true,
                 ),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 80),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    node['title'] ?? '', 
-                    style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.cyanAccent, shadows: [Shadow(blurRadius: 15, color: Colors.black)])
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    node['content'] ?? '', 
-                    style: const TextStyle(fontSize: 22, height: 1.6, color: Colors.white, shadows: [Shadow(blurRadius: 8, color: Colors.black)])
-                  ),
-                  const SizedBox(height: 50),
-                  Wrap(
-                    spacing: 20,
-                    runSpacing: 20,
-                    children: (node['options'] as List).map((opt) => ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 28),
-                        backgroundColor: Colors.cyan.withOpacity(0.1),
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.cyanAccent, width: 1),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      onPressed: () => _onOptionPressed(opt['targetId']),
-                      child: Text(opt['label'] as String, style: const TextStyle(fontSize: 20)),
-                    )).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+                home: const MoviePlayer(),
+              );
+            }
+          }
 
-  Widget _buildMediaBackground(Map<String, dynamic> node) {
-    final mediaSrc = node['mediaSrc'];
-    if (_videoController != null && _isInitialized) {
-      return SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _videoController!.value.size.width,
-            height: _videoController!.value.size.height,
-            child: VideoPlayer(_videoController!),
-          ),
-        ),
-      );
-    } else if (mediaSrc != null && mediaSrc != "") {
-      return Image.network(mediaSrc, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.black));
-    }
-    return Container(color: Colors.black);
-  }
-}
-'@
-          # 写入 main.dart 且确保目录正确
-          $dartPath = "player_app/lib/main.dart"
-          Set-Content -Path $dartPath -Value $dartCode -Encoding utf8
+          class MoviePlayer extends StatefulWidget {
+            const MoviePlayer({super.key});
+            @override
+            State<MoviePlayer> createState() => _MoviePlayerState();
+          }
+
+          class _MoviePlayerState extends State<MoviePlayer> {
+            Map<String, dynamic>? project;
+            String? currentId;
+            VideoPlayerController? _videoController;
+            bool _isInitialized = false;
+
+            @override
+            void initState() {
+              super.initState();
+              _loadProject();
+            }
+
+            @override
+            void dispose() {
+              _videoController?.dispose();
+              super.dispose();
+            }
+
+            Future<void> _loadProject() async {
+              try {
+                final String response = await rootBundle.loadString('assets/movie_config.json');
+                final data = await json.decode(response);
+                setState(() {
+                  project = data;
+                  currentId = 'start';
+                });
+                _setupMedia();
+              } catch (e) {
+                debugPrint("Data Load Error: $e");
+              }
+            }
+
+            void _setupMedia() async {
+              final nodes = project?['nodes'] as Map<String, dynamic>?;
+              final node = nodes?[currentId];
+              if (node == null) return;
+
+              setState(() { _isInitialized = false; });
+              await _videoController?.dispose();
+              _videoController = null;
+
+              final String mediaSrc = node['mediaSrc'] ?? '';
+              final String mediaType = node['mediaType'] ?? 'none';
+              
+              bool shouldPlayVideo = (mediaType == 'video') || (mediaSrc.toLowerCase().contains('.mp4'));
+
+              if (shouldPlayVideo && mediaSrc.isNotEmpty) {
+                _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
+                try {
+                  await _videoController!.initialize();
+                  await _videoController!.setLooping(true);
+                  await _videoController!.play();
+                  await _videoController!.setVolume(1.0);
+                  setState(() { _isInitialized = true; });
+                } catch (e) {
+                  debugPrint("Video Init Error: $e");
+                }
+              } else {
+                setState(() {});
+              }
+            }
+
+            void _onOptionPressed(String targetId) {
+              setState(() {
+                currentId = targetId;
+              });
+              _setupMedia();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              
+              final nodes = project!['nodes'] as Map<String, dynamic>?;
+              final node = nodes?[currentId];
+              
+              if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
+
+              return Scaffold(
+                backgroundColor: Colors.black,
+                body: Stack(
+                  children: [
+                    Positioned.fill(child: _buildMediaBackground(node)),
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 80),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              node['title'] ?? '', 
+                              style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.cyanAccent, shadows: [Shadow(blurRadius: 15, color: Colors.black)])
+                            ),
+                            const SizedBox(height: 24),
+                            Text(
+                              node['content'] ?? '', 
+                              style: const TextStyle(fontSize: 22, height: 1.6, color: Colors.white, shadows: [Shadow(blurRadius: 8, color: Colors.black)])
+                            ),
+                            const SizedBox(height: 50),
+                            Wrap(
+                              spacing: 20,
+                              runSpacing: 20,
+                              children: (node['options'] as List).map((opt) => ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 28),
+                                  backgroundColor: Colors.cyan.withOpacity(0.1),
+                                  foregroundColor: Colors.white,
+                                  side: const BorderSide(color: Colors.cyanAccent, width: 1),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                onPressed: () => _onOptionPressed(opt['targetId']),
+                                child: Text(opt['label'] as String, style: const TextStyle(fontSize: 20)),
+                              )).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget _buildMediaBackground(Map<String, dynamic> node) {
+              final mediaSrc = node['mediaSrc'];
+              if (_videoController != null && _isInitialized) {
+                return SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: _videoController!.value.size.width,
+                      height: _videoController!.value.size.height,
+                      child: VideoPlayer(_videoController!),
+                    ),
+                  ),
+                );
+              } else if (mediaSrc != null && mediaSrc != "") {
+                return Image.network(mediaSrc, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.black));
+              }
+              return Container(color: Colors.black);
+            }
+          }
+          '@
+          
+          # 去除每行多余的缩进并写入文件
+          $dartCode.Trim() -replace '(?m)^\s{10}', '' | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
 
       - name: 5. 注册资源与依赖
         shell: pwsh
         run: |
           cd player_app
           flutter pub add video_player
-          # 在 pubspec.yaml 中注入 assets 声明
           $content = Get-Content pubspec.yaml
           $newContent = $content -replace '# assets:', "assets:`n    - assets/movie_config.json"
           Set-Content pubspec.yaml $newContent
