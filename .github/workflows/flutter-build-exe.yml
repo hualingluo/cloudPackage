@@ -29,18 +29,16 @@ jobs:
       - name: 4. 注入智能播放器引擎与数据
         shell: pwsh
         run: |
-          # 确保 assets 目录存在
           $assetsPath = "player_app/assets"
           if (!(Test-Path $assetsPath)) { New-Item -ItemType Directory -Path $assetsPath }
           
-          # 优先使用工程导出的 project.json，否则回退到 metadata.json
           if (Test-Path "project.json") {
               Copy-Item "project.json" -Destination "player_app/assets/movie_config.json" -Force
           } else {
               Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json" -Force
           }
           
-          # 写入具有协议自愈能力的 Dart 源码
+          # 写入具有高性能自愈能力的播放引擎
           $dartCode = @'
           import 'dart:convert';
           import 'dart:async';
@@ -83,6 +81,7 @@ jobs:
             VideoPlayerController? _videoController;
             bool _isInitialized = false;
             String? _errorMessage;
+            String _loadingStatus = "准备中...";
             bool _isLoading = true;
 
             @override
@@ -107,7 +106,7 @@ jobs:
                 });
                 _setupMedia();
               } catch (e) {
-                setState(() { _errorMessage = "配置文件读取错误: $e"; _isLoading = false; });
+                setState(() { _errorMessage = "剧本加载失败: $e"; _isLoading = false; });
               }
             }
 
@@ -120,30 +119,28 @@ jobs:
                 _isInitialized = false; 
                 _isLoading = true; 
                 _errorMessage = null; 
+                _loadingStatus = "正在建立资源连接...";
               });
 
               await _videoController?.dispose();
               _videoController = null;
 
               String mediaSrc = (node['mediaSrc'] ?? '').toString();
-              final String mediaType = (node['mediaType'] ?? 'none').toString();
-              
-              bool isVideo = (mediaType == 'video') || (mediaSrc.toLowerCase().contains('.mp4'));
+              bool isVideo = mediaSrc.toLowerCase().contains('.mp4') || (node['mediaType'] == 'video');
 
               if (isVideo && mediaSrc.isNotEmpty) {
-                // 尝试首选协议加载
-                bool success = await _tryInitVideo(mediaSrc);
+                // 1. 尝试原始链接
+                bool success = await _tryInitVideo(mediaSrc, "正在解析媒体流...");
                 
-                // 如果是 http 且失败了，尝试自动升级到 https (解决 Windows 混合内容安全策略问题)
+                // 2. 如果失败且是 HTTP，自动升级到 HTTPS 再次尝试
                 if (!success && mediaSrc.startsWith('http://')) {
                   String secureSrc = mediaSrc.replaceFirst('http://', 'https://');
-                  debugPrint("HTTP加载失败，尝试 HTTPS: $secureSrc");
-                  success = await _tryInitVideo(secureSrc);
+                  success = await _tryInitVideo(secureSrc, "正在重试加密链接...");
                 }
 
                 if (!success && mounted) {
                   setState(() {
-                    _errorMessage = "视频加载失败：资源无法访问或格式不受支持。\n地址: $mediaSrc";
+                    _errorMessage = "视频加载失败，请检查网络。\n源地址: $mediaSrc";
                     _isLoading = false;
                   });
                 }
@@ -152,11 +149,14 @@ jobs:
               }
             }
 
-            Future<bool> _tryInitVideo(String url) async {
+            Future<bool> _tryInitVideo(String url, String statusMsg) async {
               try {
+                setState(() => _loadingStatus = statusMsg);
                 _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
-                // Windows 平台建议稍微延长超时
-                await _videoController!.initialize().timeout(const Duration(seconds: 20));
+                
+                // 设置较短的初始化超时 (12秒)，防止无限转圈
+                await _videoController!.initialize().timeout(const Duration(seconds: 12));
+                
                 await _videoController!.setLooping(true);
                 await _videoController!.setVolume(1.0);
                 await _videoController!.play();
@@ -166,7 +166,6 @@ jobs:
                 }
                 return true;
               } catch (e) {
-                debugPrint("Video Init Try Failed ($url): $e");
                 await _videoController?.dispose();
                 _videoController = null;
                 return false;
@@ -181,30 +180,43 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.cyan)));
-              
-              final nodes = project!['nodes'] as Map<String, dynamic>?;
-              final node = nodes?[currentId];
-              
-              if (node == null) return const Scaffold(body: Center(child: Text('剧终', style: TextStyle(fontSize: 32))));
+              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              final node = (project!['nodes'] as Map<String, dynamic>)[currentId];
+              if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
 
               return Scaffold(
                 body: Stack(
                   children: [
+                    // 背景：视频或默认黑背景
                     Positioned.fill(child: _buildMediaBackground(node)),
+                    
+                    // 电影级遮罩
                     Positioned.fill(
                       child: Container(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Colors.black.withOpacity(0.85)],
+                            colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
                           ),
                         ),
                       ),
                     ),
+
+                    // 加载状态显示
                     if (_isLoading)
-                      const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(color: Colors.cyanAccent),
+                            const SizedBox(height: 20),
+                            Text(_loadingStatus, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                          ],
+                        ),
+                      ),
+
+                    // 文字与选项内容
                     Align(
                       alignment: Alignment.bottomCenter,
                       child: Container(
@@ -213,65 +225,36 @@ jobs:
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              node['title'] ?? '', 
-                              style: const TextStyle(
-                                fontSize: 48, 
-                                fontWeight: FontWeight.bold, 
-                                color: Colors.cyanAccent, 
-                                shadows: [Shadow(blurRadius: 15, color: Colors.black)]
-                              )
-                            ),
-                            const SizedBox(height: 24),
-                            Text(
-                              node['content'] ?? '', 
-                              style: const TextStyle(
-                                fontSize: 22, 
-                                height: 1.6, 
-                                color: Colors.white, 
-                                shadows: [Shadow(blurRadius: 8, color: Colors.black)]
-                              )
-                            ),
-                            const SizedBox(height: 50),
+                            Text(node['title'] ?? '', style: const TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+                            const SizedBox(height: 20),
+                            Text(node['content'] ?? '', style: const TextStyle(fontSize: 20, height: 1.6, color: Colors.white)),
+                            const SizedBox(height: 40),
                             Wrap(
-                              spacing: 20,
-                              runSpacing: 20,
+                              spacing: 15,
+                              runSpacing: 15,
                               children: (node['options'] as List? ?? []).map((opt) => ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 28),
-                                  backgroundColor: Colors.white.withOpacity(0.08),
-                                  foregroundColor: Colors.white,
-                                  side: const BorderSide(color: Colors.cyanAccent, width: 1.5),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                  elevation: 0,
+                                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 25),
+                                  backgroundColor: Colors.white.withOpacity(0.1),
+                                  side: const BorderSide(color: Colors.cyanAccent),
                                 ),
                                 onPressed: () => _onOptionPressed(opt['targetId']?.toString() ?? ''),
-                                child: Text(opt['label']?.toString() ?? '继续', style: const TextStyle(fontSize: 20)),
+                                child: Text(opt['label']?.toString() ?? '', style: const TextStyle(fontSize: 18, color: Colors.white)),
                               )).toList(),
                             ),
                           ],
                         ),
                       ),
                     ),
+
+                    // 错误悬浮窗
                     if (_errorMessage != null)
                       Positioned(
-                        top: 40,
-                        left: 40,
-                        right: 40,
+                        top: 40, left: 40, right: 40,
                         child: Container(
                           padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withOpacity(0.8),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.white30),
-                          ),
-                          child: Column(
-                            children: [
-                              const Icon(Icons.error_outline, color: Colors.white, size: 28),
-                              const SizedBox(height: 8),
-                              Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14)),
-                            ],
-                          ),
+                          decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.9), borderRadius: BorderRadius.circular(8)),
+                          child: Text(_errorMessage!, style: const TextStyle(color: Colors.white)),
                         ),
                       ),
                   ],
@@ -280,8 +263,6 @@ jobs:
             }
 
             Widget _buildMediaBackground(Map<String, dynamic> node) {
-              final mediaSrc = node['mediaSrc']?.toString() ?? '';
-              
               if (_isInitialized && _videoController != null) {
                 return SizedBox.expand(
                   child: FittedBox(
@@ -293,19 +274,12 @@ jobs:
                     ),
                   ),
                 );
-              } else if (mediaSrc.isNotEmpty && !mediaSrc.toLowerCase().contains('.mp4')) {
-                return Image.network(
-                  mediaSrc, 
-                  fit: BoxFit.cover, 
-                  errorBuilder: (c, e, s) => Container(color: Colors.black)
-                );
               }
               return Container(color: Colors.black);
             }
           }
           '@
           
-          # 缩进处理并写入文件
           $dartCode.Trim() -replace '(?m)^\s{10}', '' | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
 
       - name: 5. 注册资源与依赖
