@@ -2,8 +2,9 @@ name: 🎬 抖剧 Douju - Flutter EXE 自动化打包
 
 on:
   push:
-    branches: [ "master" ]
-  workflow_dispatch: 
+    branches:
+      - master
+  workflow_dispatch: {}
 
 jobs:
   build-windows:
@@ -25,21 +26,22 @@ jobs:
           cd player_app
           flutter config --enable-windows-desktop
 
-      - name: 4. 注入智能播放器引擎
+      - name: 4. 注入智能播放器引擎与数据
         shell: pwsh
         run: |
-          if (!(Test-Path "player_app/assets")) { 
-            mkdir player_app/assets 
-          }
+          # 准备 assets 目录
+          $assetsDir = "player_app/assets"
+          if (!(Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir }
           
-          # 优先使用 project.json，否则使用 metadata.json
+          # 拷贝配置文件
           if (Test-Path "project.json") {
-              copy project.json player_app\assets\movie_config.json
+              Copy-Item "project.json" -Destination "player_app/assets/movie_config.json"
           } else {
-              copy metadata.json player_app\assets\movie_config.json
+              Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json"
           }
           
-          $dartCode = @'
+          # 编写 Dart 源码
+          $dartCode = @"
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -49,7 +51,6 @@ void main() => runApp(const MovieApp());
 
 class MovieApp extends StatelessWidget {
   const MovieApp({super.key});
-  
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -67,7 +68,6 @@ class MovieApp extends StatelessWidget {
 
 class MoviePlayer extends StatefulWidget {
   const MoviePlayer({super.key});
-  
   @override
   State<MoviePlayer> createState() => _MoviePlayerState();
 }
@@ -100,7 +100,7 @@ class _MoviePlayerState extends State<MoviePlayer> {
       });
       _setupMedia();
     } catch (e) {
-      debugPrint("Load Failed: $e");
+      debugPrint("数据加载失败: \$e");
     }
   }
 
@@ -109,18 +109,15 @@ class _MoviePlayerState extends State<MoviePlayer> {
     final node = nodes?[currentId];
     if (node == null) return;
 
-    setState(() { 
-      _isInitialized = false; 
-    });
-    
+    setState(() { _isInitialized = false; });
     await _videoController?.dispose();
     _videoController = null;
 
     final String mediaSrc = node['mediaSrc'] ?? '';
     final String mediaType = node['mediaType'] ?? 'none';
     
-    // 智能检测：如果后缀是 .mp4 或者 mediaType 为 video
-    bool shouldPlayVideo = mediaType == 'video' || mediaSrc.toLowerCase().endsWith('.mp4');
+    // 智能识别视频：后缀为 .mp4 或 mediaType 为 video
+    bool shouldPlayVideo = mediaType == 'video' || mediaSrc.toLowerCase().contains('.mp4');
 
     if (shouldPlayVideo && mediaSrc.isNotEmpty) {
       _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
@@ -129,11 +126,9 @@ class _MoviePlayerState extends State<MoviePlayer> {
         await _videoController!.setLooping(true);
         await _videoController!.play();
         await _videoController!.setVolume(1.0);
-        setState(() { 
-          _isInitialized = true; 
-        });
+        setState(() { _isInitialized = true; });
       } catch (e) {
-        debugPrint("Video Init Error: $e");
+        debugPrint("视频初始化异常: \$e");
       }
     } else {
       setState(() {});
@@ -149,55 +144,36 @@ class _MoviePlayerState extends State<MoviePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    if (project == null) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator()
-        )
-      );
-    }
+    if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     
     final nodes = project!['nodes'] as Map<String, dynamic>?;
     final node = nodes?[currentId];
     
-    if (node == null) {
-      return const Scaffold(
-        body: Center(
-          child: Text('FINISH')
-        )
-      );
-    }
-
-    // 安全处理 options
-    final options = node['options'];
-    final List<dynamic> optionList = (options is List) ? options : [];
+    if (node == null) return const Scaffold(body: Center(child: Text('剧情结束')));
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Background Media
+          // 背景媒体层
           Positioned.fill(
             child: _buildMediaBackground(node),
           ),
           
-          // Overlay Gradient
+          // 渐变蒙版
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.8)
-                  ],
+                  colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
                 ),
               ),
             ),
           ),
 
-          // Content
+          // 文本内容与选项层
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -208,65 +184,29 @@ class _MoviePlayerState extends State<MoviePlayer> {
                 children: [
                   Text(
                     node['title'] ?? '', 
-                    style: const TextStyle(
-                      fontSize: 48, 
-                      fontWeight: FontWeight.bold, 
-                      color: Colors.cyanAccent, 
-                      shadows: [
-                        Shadow(
-                          blurRadius: 15, 
-                          color: Colors.black
-                        )
-                      ]
-                    )
+                    style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.cyanAccent, shadows: [Shadow(blurRadius: 15, color: Colors.black)])
                   ),
                   const SizedBox(height: 24),
                   Text(
                     node['content'] ?? '', 
-                    style: const TextStyle(
-                      fontSize: 22, 
-                      height: 1.6, 
-                      color: Colors.white, 
-                      shadows: [
-                        Shadow(
-                          blurRadius: 8, 
-                          color: Colors.black
-                        )
-                      ]
-                    )
+                    style: const TextStyle(fontSize: 22, height: 1.6, color: Colors.white, shadows: [Shadow(blurRadius: 8, color: Colors.black)])
                   ),
                   const SizedBox(height: 50),
-                  if (optionList.isNotEmpty) 
-                    Wrap(
-                      spacing: 20,
-                      runSpacing: 20,
-                      children: optionList.map((opt) {
-                        final label = opt['label']?.toString() ?? '继续';
-                        final targetId = opt['targetId']?.toString() ?? 'start';
-                        return ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 48, 
-                              vertical: 28
-                            ),
-                            backgroundColor: Colors.cyan.withOpacity(0.1),
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(
-                              color: Colors.cyanAccent, 
-                              width: 1
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)
-                            ),
-                          ),
-                          onPressed: () => _onOptionPressed(targetId),
-                          child: Text(
-                            label, 
-                            style: const TextStyle(fontSize: 20)
-                          ),
-                        );
-                      }).toList(),
-                    ),
+                  Wrap(
+                    spacing: 20,
+                    runSpacing: 20,
+                    children: (node['options'] as List).map((opt) => ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 28),
+                        backgroundColor: Colors.cyan.withOpacity(0.1),
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.cyanAccent, width: 1),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () => _onOptionPressed(opt['targetId']),
+                      child: Text(opt['label'] as String, style: const TextStyle(fontSize: 20)),
+                    )).toList(),
+                  ),
                 ],
               ),
             ),
@@ -294,107 +234,40 @@ class _MoviePlayerState extends State<MoviePlayer> {
       return Image.network(
         mediaSrc, 
         fit: BoxFit.cover, 
-        errorBuilder: (context, error, stackTrace) {
-          return Container(color: Colors.grey[900]);
-        }
+        errorBuilder: (c, e, s) => Container(color: Colors.grey[900])
       );
     }
     return Container(color: Colors.black);
   }
 }
-'@
-          
-          # 写入Dart文件
-          [System.IO.File]::WriteAllText(
-            "$PWD\player_app\lib\main.dart",
-            $dartCode,
-            [System.Text.Encoding]::UTF8
-          )
-          
-          # 验证写入的文件
-          Write-Host "=== 验证生成的Dart文件 ==="
-          Get-Content player_app\lib\main.dart -TotalCount 5
-          Write-Host "..."
-          Get-Content player_app\lib\main.dart -Tail 5
+"@
+          $dartCode | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
 
       - name: 5. 注册资源与依赖
         shell: pwsh
         run: |
           cd player_app
-          
-          # 添加视频播放器依赖
           flutter pub add video_player
-          
-          # 安全地修改pubspec.yaml - 添加assets配置
-          $pubspecPath = "$PWD/pubspec.yaml"
-          $pubspecContent = Get-Content $pubspecPath -Raw
-          
-          # 查找flutter部分并插入assets配置
-          if ($pubspecContent -match '(flutter:\s*\r?\n)(\s+)(.*?)(\r?\n\r?\n|\r?\n$)') {
-              $indent = $matches[2]
-              $newContent = $pubspecContent -replace '(flutter:\s*\r?\n)(\s+)(.*?)(\r?\n\r?\n|\r?\n$)', "flutter:`n${indent}assets:`n${indent}  - assets/movie_config.json`n`n"
-          } else {
-              # 如果找不到flutter部分，追加到文件末尾
-              $newContent = $pubspecContent + "`nflutter:`n  assets:`n    - assets/movie_config.json`n"
-          }
-          
-          [System.IO.File]::WriteAllText($pubspecPath, $newContent, [System.Text.Encoding]::UTF8)
-          
-          Write-Host "=== 修改后的pubspec.yaml (相关部分) ==="
-          Get-Content $pubspecPath | Select-String -Pattern "assets:|flutter:" -Context 0,2
+          # 在 pubspec.yaml 中注册资源文件
+          (Get-Content pubspec.yaml) -replace '# assets:', "assets:`n    - assets/movie_config.json" | Set-Content pubspec.yaml
 
       - name: 6. 编译 Release EXE
         run: |
           cd player_app
           flutter pub get
-          echo "=== 运行Dart语法分析 ==="
-          flutter analyze --no-pub || echo "分析发现问题，但继续构建..."
-          echo "=== 开始构建Windows应用 ==="
           flutter build windows --release
 
-      - name: 7. 整理产物
+      - name: 7. 整理并压缩产物
         shell: pwsh
         run: |
-          # 确保输出目录存在
-          if (Test-Path "output") {
-              Remove-Item output -Recurse -Force
-          }
-          mkdir output
-          
-          # 复制构建结果
-          $sourceDir = "player_app\build\windows\x64\runner\Release"
-          if (Test-Path $sourceDir) {
-              Copy-Item -Path "$sourceDir\*" -Destination "output\" -Recurse -Force
-              Write-Host "已复制文件到输出目录"
-              
-              # 列出生成的文件
-              Get-ChildItem output -Recurse | ForEach-Object {
-                  Write-Host "  $($_.FullName.Replace($PWD, ''))"
-              }
-          } else {
-              Write-Error "构建目录不存在: $sourceDir"
-              exit 1
-          }
-          
-          # 创建ZIP压缩包
-          Compress-Archive -Path output\* -DestinationPath Douju_Player_Windows.zip -Force
-          Write-Host "=== 生成ZIP包信息 ==="
-          $zipInfo = Get-Item Douju_Player_Windows.zip
-          Write-Host "ZIP文件大小: $([math]::Round($zipInfo.Length/1MB, 2)) MB"
-          Write-Host "ZIP路径: $($zipInfo.FullName)"
+          if (Test-Path "output") { Remove-Item -Recurse -Force "output" }
+          New-Item -ItemType Directory -Path "output"
+          Copy-Item "player_app/build/windows/x64/runner/Release/*" -Destination "output/" -Recurse
+          Compress-Archive -Path "output/*" -DestinationPath "Douju_Player_Windows.zip" -Force
 
-      - name: 8. 发布 Artifacts
+      - name: 8. 上传打包文件 (Artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: Douju-Flutter-EXE-Build
           path: Douju_Player_Windows.zip
           retention-days: 7
-
-      - name: 9. 构建完成通知
-        shell: pwsh
-        if: success()
-        run: |
-          Write-Host "✅ Flutter Windows应用构建成功！"
-          Write-Host "📦 产物: Douju_Player_Windows.zip"
-          Write-Host "📁 包含文件:"
-          Get-ChildItem output -Name
