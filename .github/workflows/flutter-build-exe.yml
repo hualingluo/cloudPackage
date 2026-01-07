@@ -3,7 +3,7 @@ name: 🎬 抖剧 Douju - Flutter EXE 自动化打包
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   workflow_dispatch: # 支持在 GitHub 页面手动点击触发
 
 jobs:
