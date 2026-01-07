@@ -3,7 +3,7 @@ name: 🎬 抖剧 Douju - Flutter EXE 自动化打包
 on:
   push:
     branches: [ "master" ]
-  workflow_dispatch: # 支持在 GitHub 页面手动点击触发
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -21,7 +21,6 @@ jobs:
 
       - name: 3. 初始化 Flutter 项目
         run: |
-          # 创建一个临时的 flutter 项目
           flutter create --platforms=windows player_app
           cd player_app
           flutter config --enable-windows-desktop
@@ -29,162 +28,158 @@ jobs:
       - name: 4. 注入播放器引擎与数据
         shell: pwsh
         run: |
-          # 准备资源目录
           mkdir player_app/assets
           
-          # 策略：如果根目录有 project.json 则用它，否则用默认的 metadata.json
           if (Test-Path "project.json") {
               copy project.json player_app\assets\movie_config.json
           } else {
               copy metadata.json player_app\assets\movie_config.json
           }
           
-          # 写入核心播放器代码 (使用单引号 @' '@ 避免 PowerShell 尝试解析 Dart 中的 $ 变量)
-          $dartCode = @'
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+          # 使用单引号Here-String避免转义问题
+          @'
+          import 'dart:convert';
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
 
-void main() => runApp(const MovieApp());
+          void main() => runApp(const MovieApp());
 
-class MovieApp extends StatelessWidget {
-  const MovieApp({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Douju Player',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.cyan,
-        useMaterial3: true,
-      ),
-      home: const MoviePlayer(),
-    );
-  }
-}
-
-class MoviePlayer extends StatefulWidget {
-  const MoviePlayer({super.key});
-  @override
-  State<MoviePlayer> createState() => _MoviePlayerState();
-}
-
-class _MoviePlayerState extends State<MoviePlayer> {
-  Map<String, dynamic>? project;
-  String? currentId;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProject();
-  }
-
-  Future<void> _loadProject() async {
-    try {
-      final String response = await rootBundle.loadString('assets/movie_config.json');
-      final data = await json.decode(response);
-      setState(() {
-        project = data;
-        currentId = 'start';
-      });
-    } catch (e) {
-      debugPrint("加载失败: $e");
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    
-    final nodes = project!['nodes'] as Map<String, dynamic>?;
-    final node = nodes?[currentId];
-    
-    if (node == null) return const Scaffold(body: Center(child: Text('剧终或数据错误')));
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // 背景层 (支持网络图片)
-          Positioned.fill(
-            child: (node['mediaSrc'] != null && node['mediaSrc'] != "")
-              ? Image.network(node['mediaSrc'], fit: BoxFit.cover, 
-                  errorBuilder: (c, e, s) => Container(color: Colors.grey[900]))
-              : Container(color: Colors.black),
-          ),
-          
-          // 渐变蒙版
-          Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+          class MovieApp extends StatelessWidget {
+            const MovieApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Douju Player',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  brightness: Brightness.dark,
+                  primarySwatch: Colors.cyan,
+                  useMaterial3: true,
                 ),
-              ),
-            ),
-          ),
+                home: const MoviePlayer(),
+              );
+            }
+          }
 
-          // 内容层
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              padding: const EdgeInsets.all(40),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(node['title'] ?? '', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
-                  const SizedBox(height: 20),
-                  Text(node['content'] ?? '', style: const TextStyle(fontSize: 18, height: 1.6, color: Colors.white70)),
-                  const SizedBox(height: 40),
-                  Wrap(
-                    spacing: 16,
-                    runSpacing: 16,
-                    children: (node['options'] as List).map((opt) => ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-                        backgroundColor: Colors.white.withOpacity(0.1),
-                        foregroundColor: Colors.white,
-                        side: const BorderSide(color: Colors.white24),
+          class MoviePlayer extends StatefulWidget {
+            const MoviePlayer({super.key});
+            @override
+            State<MoviePlayer> createState() => _MoviePlayerState();
+          }
+
+          class _MoviePlayerState extends State<MoviePlayer> {
+            Map<String, dynamic>? project;
+            String? currentId;
+
+            @override
+            void initState() {
+              super.initState();
+              _loadProject();
+            }
+
+            Future<void> _loadProject() async {
+              try {
+                final String response = await rootBundle.loadString('assets/movie_config.json');
+                final data = await json.decode(response);
+                setState(() {
+                  project = data;
+                  currentId = 'start';
+                });
+              } catch (e) {
+                debugPrint("加载失败: $e");
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              
+              final nodes = project!['nodes'] as Map<String, dynamic>?;
+              final node = nodes?[currentId];
+              
+              if (node == null) return const Scaffold(body: Center(child: Text('剧终或数据错误')));
+
+              return Scaffold(
+                backgroundColor: Colors.black,
+                body: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: (node['mediaSrc'] != null && node['mediaSrc'] != "")
+                        ? Image.network(node['mediaSrc'], fit: BoxFit.cover, 
+                            errorBuilder: (c, e, s) => Container(color: Colors.grey[900]))
+                        : Container(color: Colors.black),
+                    ),
+                    
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
+                          ),
+                        ),
                       ),
-                      onPressed: () => setState(() => currentId = opt['targetId']),
-                      child: Text(opt['label'] as String, style: const TextStyle(fontSize: 16)),
-                    )).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-'@
-          $dartCode | Out-File -FilePath player_app/lib/main.dart -Encoding utf8
+                    ),
+
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Container(
+                        padding: const EdgeInsets.all(40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(node['title'] ?? '', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+                            const SizedBox(height: 20),
+                            Text(node['content'] ?? '', style: const TextStyle(fontSize: 18, height: 1.6, color: Colors.white70)),
+                            const SizedBox(height: 40),
+                            Wrap(
+                              spacing: 16,
+                              runSpacing: 16,
+                              children: (node['options'] as List).map((opt) => ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+                                  backgroundColor: Colors.white.withOpacity(0.1),
+                                  foregroundColor: Colors.white,
+                                  side: const BorderSide(color: Colors.white24),
+                                ),
+                                onPressed: () => setState(() => currentId = opt['targetId']),
+                                child: Text(opt['label'], style: const TextStyle(fontSize: 16)),
+                              )).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          '@ | Out-File -FilePath player_app/lib/main.dart -Encoding utf8
 
       - name: 5. 注册资源文件
         shell: pwsh
         run: |
           cd player_app
-          (Get-Content pubspec.yaml) -replace '# assets:', 'assets:' -replace '#   - images/a.png', '    - assets/movie_config.json' | Set-Content pubspec.yaml
+          # 更安全的方式修改pubspec.yaml
+          $content = Get-Content pubspec.yaml -Raw
+          $content = $content -replace '(?m)^  assets:.*$', "  assets:\n    - assets/movie_config.json"
+          $content | Set-Content pubspec.yaml -Encoding utf8
 
       - name: 6. 编译 Release EXE
         run: |
           cd player_app
           flutter pub get
+          flutter analyze  # 先分析代码，确保语法正确
           flutter build windows --release
 
       - name: 7. 整理并上传产物
         shell: pwsh
         run: |
-          # 移动编译结果到根目录
           mkdir output
           xcopy player_app\build\windows\x64\runner\Release\* output\ /E /H /C /I
-          # 压缩
           Compress-Archive -Path output\* -DestinationPath Douju_Player_Windows.zip
 
       - name: 8. 发布到 Artifacts
