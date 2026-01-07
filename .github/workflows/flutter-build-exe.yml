@@ -4,7 +4,7 @@ name: 🎬 抖剧 Douju - Flutter EXE 自动化打包
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # 支持手动触发打包
+  workflow_dispatch: # 支持在 GitHub 页面手动点击触发
 
 jobs:
   build-windows:
@@ -22,21 +22,25 @@ jobs:
 
       - name: 3. 初始化 Flutter 项目
         run: |
-          # 创建一个临时的 flutter 项目用于打包
+          # 创建一个临时的 flutter 项目
           flutter create --platforms=windows player_app
           cd player_app
-          # 启用 Windows 桌面支持
           flutter config --enable-windows-desktop
 
-      - name: 4. 注入播放器核心代码与剧本数据
+      - name: 4. 注入播放器引擎与数据
+        shell: pwsh
         run: |
           # 准备资源目录
           mkdir player_app/assets
-          # 将根目录的剧本数据拷贝到资源目录 (默认使用 metadata.json 作为演示剧本)
-          copy metadata.json player_app\assets\movie_config.json
           
-          # 创建 Dart 播放器代码
-          # 注意：这里我们使用一个预定义的 Dart 模板，它会读取 assets/movie_config.json
+          # 策略：如果根目录有 project.json 则用它，否则用默认的 metadata.json
+          if (Test-Path "project.json") {
+              copy project.json player_app\assets\movie_config.json
+          } else {
+              copy metadata.json player_app\assets\movie_config.json
+          }
+          
+          # 写入核心播放器代码 (Dart)
           $dartCode = @"
           import 'dart:convert';
           import 'package:flutter/material.dart';
@@ -50,7 +54,12 @@ jobs:
             Widget build(BuildContext context) {
               return MaterialApp(
                 title: 'Douju Player',
-                theme: ThemeData.dark(),
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  brightness: Brightness.dark,
+                  primarySwatch: Colors.cyan,
+                  useMaterial3: true,
+                ),
                 home: const MoviePlayer(),
               );
             }
@@ -73,13 +82,16 @@ jobs:
             }
 
             Future<void> _loadProject() async {
-              final String response = await rootBundle.loadString('assets/movie_config.json');
-              final data = await json.decode(response);
-              setState(() {
-                project = data;
-                // 默认从第一个节点或名为 start 的节点开始
-                currentId = 'start';
-              });
+              try {
+                final String response = await rootBundle.loadString('assets/movie_config.json');
+                final data = await json.decode(response);
+                setState(() {
+                  project = data;
+                  currentId = 'start';
+                });
+              } catch (e) {
+                debugPrint("加载失败: \$e");
+              }
             }
 
             @override
@@ -89,44 +101,58 @@ jobs:
               final nodes = project!['nodes'] as Map<String, dynamic>?;
               final node = nodes?[currentId];
               
-              if (node == null) return const Scaffold(body: Center(child: Text('剧终或节点丢失')));
+              if (node == null) return const Scaffold(body: Center(child: Text('剧终或数据错误')));
 
               return Scaffold(
                 backgroundColor: Colors.black,
                 body: Stack(
                   children: [
-                    if (node['mediaSrc'] != null && node['mediaSrc'] != "")
-                      Positioned.fill(child: Image.network(node['mediaSrc'], fit: BoxFit.cover)),
+                    // 背景层 (支持网络图片)
+                    Positioned.fill(
+                      child: (node['mediaSrc'] != null && node['mediaSrc'] != "")
+                        ? Image.network(node['mediaSrc'], fit: BoxFit.cover, 
+                            errorBuilder: (c, e, s) => Container(color: Colors.grey[900]))
+                        : Container(color: Colors.black),
+                    ),
                     
-                    Align(
-                      alignment: Alignment.bottomCenter,
+                    // 渐变蒙版
+                    Positioned.fill(
                       child: Container(
-                        padding: const EdgeInsets.all(32),
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
-                            colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+                            colors: [Colors.transparent, Colors.black.withOpacity(0.9)],
                           ),
                         ),
+                      ),
+                    ),
+
+                    // 内容层
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Container(
+                        padding: const EdgeInsets.all(40),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(node['title'] ?? '', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
-                            const SizedBox(height: 16),
-                            Text(node['content'] ?? '', style: const TextStyle(fontSize: 18, height: 1.6)),
-                            const SizedBox(height: 32),
+                            Text(node['title'] ?? '', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.cyanAccent)),
+                            const SizedBox(height: 20),
+                            Text(node['content'] ?? '', style: const TextStyle(fontSize: 18, height: 1.6, color: Colors.white70)),
+                            const SizedBox(height: 40),
                             Wrap(
-                              spacing: 12,
-                              runSpacing: 12,
+                              spacing: 16,
+                              runSpacing: 16,
                               children: (node['options'] as List).map((opt) => ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                  backgroundColor: Colors.white10,
+                                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+                                  backgroundColor: Colors.white.withOpacity(0.1),
+                                  foregroundColor: Colors.white,
+                                  side: const BorderSide(color: Colors.white24),
                                 ),
                                 onPressed: () => setState(() => currentId = opt['targetId']),
-                                child: Text(opt['label']),
+                                child: Text(opt['label'], style: const TextStyle(fontSize: 16)),
                               )).toList(),
                             ),
                           ],
@@ -141,26 +167,30 @@ jobs:
           "@
           $dartCode | Out-File -FilePath player_app/lib/main.dart -Encoding utf8
 
-      - name: 5. 配置资源引用 (pubspec.yaml)
+      - name: 5. 注册资源文件
+        shell: pwsh
         run: |
-          # 使用 PowerShell 快速在 pubspec.yaml 中添加 assets 声明
           cd player_app
           (Get-Content pubspec.yaml) -replace '# assets:', 'assets:' -replace '#   - images/a.png', '    - assets/movie_config.json' | Set-Content pubspec.yaml
 
-      - name: 6. 编译 Windows EXE
+      - name: 6. 编译 Release EXE
         run: |
           cd player_app
           flutter pub get
           flutter build windows --release
 
-      - name: 7. 打包产物
+      - name: 7. 整理并上传产物
+        shell: pwsh
         run: |
-          # 压缩构建产物以便下载
-          Compress-Archive -Path player_app\build\windows\x64\runner\Release\* -DestinationPath DoujuPlayer_Windows.zip
+          # 移动编译结果到根目录
+          mkdir output
+          xcopy player_app\build\windows\x64\runner\Release\* output\ /E /H /C /I
+          # 压缩
+          Compress-Archive -Path output\* -DestinationPath Douju_Player_Windows.zip
 
-      - name: 8. 上传 Artifacts
+      - name: 8. 发布到 Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Douju-Flutter-EXE
-          path: DoujuPlayer_Windows.zip
-          retention-days: 5
+          name: Douju-Flutter-EXE-Build
+          path: Douju_Player_Windows.zip
+          retention-days: 7
