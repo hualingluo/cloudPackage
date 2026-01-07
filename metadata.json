@@ -1,0 +1,5 @@
+{
+  "name": "抖剧douju 互动电影编辑器uniapp打包",
+  "description": "AIGC+UGC 互动电影制作平台，集成 Gemini 3 Agent、Veo 3.1 视频生成与 Nano Banana 2 图像生成技术。",
+  "requestFramePermissions": []
+}
