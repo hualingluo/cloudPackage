@@ -33,33 +33,38 @@ jobs:
           $assetsPath = "player_app/assets"
           if (!(Test-Path $assetsPath)) { New-Item -ItemType Directory -Path $assetsPath }
           
-          # 拷贝配置文件
+          # 优先使用工程导出的 project.json，否则回退到 metadata.json
           if (Test-Path "project.json") {
               Copy-Item "project.json" -Destination "player_app/assets/movie_config.json" -Force
           } else {
               Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json" -Force
           }
           
-          # 写入 Dart 源码。注意：这里的代码每一行都必须相对于 run: | 进行缩进。
+          # 写入改进后的 Dart 源码
           $dartCode = @'
           import 'dart:convert';
+          import 'dart:async';
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
           import 'package:video_player/video_player.dart';
 
-          void main() => runApp(const MovieApp());
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const MovieApp());
+          }
 
           class MovieApp extends StatelessWidget {
             const MovieApp({super.key});
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'Douju Player',
+                title: 'Douju Player Pro',
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData(
                   brightness: Brightness.dark,
                   primaryColor: Colors.cyan,
                   useMaterial3: true,
+                  scaffoldBackgroundColor: Colors.black,
                 ),
                 home: const MoviePlayer(),
               );
@@ -77,6 +82,8 @@ jobs:
             String? currentId;
             VideoPlayerController? _videoController;
             bool _isInitialized = false;
+            String? _errorMessage;
+            bool _isLoading = true;
 
             @override
             void initState() {
@@ -100,41 +107,60 @@ jobs:
                 });
                 _setupMedia();
               } catch (e) {
-                debugPrint("Data Load Error: $e");
+                setState(() { _errorMessage = "配置文件加载失败: $e"; _isLoading = false; });
               }
             }
 
-            void _setupMedia() async {
+            Future<void> _setupMedia() async {
               final nodes = project?['nodes'] as Map<String, dynamic>?;
               final node = nodes?[currentId];
               if (node == null) return;
 
-              setState(() { _isInitialized = false; });
+              setState(() { 
+                _isInitialized = false; 
+                _isLoading = true; 
+                _errorMessage = null; 
+              });
+
               await _videoController?.dispose();
               _videoController = null;
 
-              final String mediaSrc = node['mediaSrc'] ?? '';
-              final String mediaType = node['mediaType'] ?? 'none';
+              String mediaSrc = (node['mediaSrc'] ?? '').toString();
+              final String mediaType = (node['mediaType'] ?? 'none').toString();
               
+              // 自动将 http 转换为 https 以规避 Windows 安全策略拦截（可选，取决于源是否支持）
+              // if (mediaSrc.startsWith('http://')) { mediaSrc = mediaSrc.replaceFirst('http://', 'https://'); }
+
               bool shouldPlayVideo = (mediaType == 'video') || (mediaSrc.toLowerCase().contains('.mp4'));
 
               if (shouldPlayVideo && mediaSrc.isNotEmpty) {
-                _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
                 try {
-                  await _videoController!.initialize();
+                  _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
+                  
+                  // 设置超时，防止无限等待
+                  await _videoController!.initialize().timeout(const Duration(seconds: 15));
                   await _videoController!.setLooping(true);
-                  await _videoController!.play();
                   await _videoController!.setVolume(1.0);
-                  setState(() { _isInitialized = true; });
+                  await _videoController!.play();
+                  
+                  if (mounted) {
+                    setState(() { _isInitialized = true; _isLoading = false; });
+                  }
                 } catch (e) {
-                  debugPrint("Video Init Error: $e");
+                  if (mounted) {
+                    setState(() { 
+                      _errorMessage = "视频加载失败: 请检查网络连接或资源地址\n$mediaSrc"; 
+                      _isLoading = false; 
+                    });
+                  }
                 }
               } else {
-                setState(() {});
+                setState(() { _isLoading = false; });
               }
             }
 
             void _onOptionPressed(String targetId) {
+              if (targetId.isEmpty) return;
               setState(() {
                 currentId = targetId;
               });
@@ -143,18 +169,20 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.cyan)));
               
               final nodes = project!['nodes'] as Map<String, dynamic>?;
               final node = nodes?[currentId];
               
-              if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
+              if (node == null) return const Scaffold(body: Center(child: Text('剧终', style: TextStyle(fontSize: 32))));
 
               return Scaffold(
-                backgroundColor: Colors.black,
                 body: Stack(
                   children: [
+                    // 背景层：视频或图片
                     Positioned.fill(child: _buildMediaBackground(node)),
+                    
+                    // 渐变蒙层
                     Positioned.fill(
                       child: Container(
                         decoration: BoxDecoration(
@@ -166,6 +194,12 @@ jobs:
                         ),
                       ),
                     ),
+
+                    // 加载指示器
+                    if (_isLoading)
+                      const Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+
+                    // 内容层
                     Align(
                       alignment: Alignment.bottomCenter,
                       child: Container(
@@ -176,41 +210,66 @@ jobs:
                           children: [
                             Text(
                               node['title'] ?? '', 
-                              style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.cyanAccent, shadows: [Shadow(blurRadius: 15, color: Colors.black)])
+                              style: const TextStyle(
+                                fontSize: 48, 
+                                fontWeight: FontWeight.bold, 
+                                color: Colors.cyanAccent, 
+                                shadows: [Shadow(blurRadius: 15, color: Colors.black)]
+                              )
                             ),
                             const SizedBox(height: 24),
                             Text(
                               node['content'] ?? '', 
-                              style: const TextStyle(fontSize: 22, height: 1.6, color: Colors.white, shadows: [Shadow(blurRadius: 8, color: Colors.black)])
+                              style: const TextStyle(
+                                fontSize: 22, 
+                                height: 1.6, 
+                                color: Colors.white, 
+                                shadows: [Shadow(blurRadius: 8, color: Colors.black)]
+                              )
                             ),
                             const SizedBox(height: 50),
                             Wrap(
                               spacing: 20,
                               runSpacing: 20,
-                              children: (node['options'] as List).map((opt) => ElevatedButton(
+                              children: (node['options'] as List? ?? []).map((opt) => ElevatedButton(
                                 style: ElevatedButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 28),
-                                  backgroundColor: Colors.cyan.withOpacity(0.1),
+                                  backgroundColor: Colors.white.withOpacity(0.05),
                                   foregroundColor: Colors.white,
                                   side: const BorderSide(color: Colors.cyanAccent, width: 1),
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  elevation: 0,
                                 ),
-                                onPressed: () => _onOptionPressed(opt['targetId']),
-                                child: Text(opt['label'] as String, style: const TextStyle(fontSize: 20)),
+                                onPressed: () => _onOptionPressed(opt['targetId']?.toString() ?? ''),
+                                child: Text(opt['label']?.toString() ?? '继续', style: const TextStyle(fontSize: 20)),
                               )).toList(),
                             ),
                           ],
                         ),
                       ),
                     ),
+                    
+                    // 错误提示
+                    if (_errorMessage != null)
+                      Positioned(
+                        top: 20,
+                        left: 20,
+                        right: 20,
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          color: Colors.red.withOpacity(0.7),
+                          child: Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        ),
+                      ),
                   ],
                 ),
               );
             }
 
             Widget _buildMediaBackground(Map<String, dynamic> node) {
-              final mediaSrc = node['mediaSrc'];
-              if (_videoController != null && _isInitialized) {
+              final mediaSrc = node['mediaSrc']?.toString() ?? '';
+              
+              if (_isInitialized && _videoController != null) {
                 return SizedBox.expand(
                   child: FittedBox(
                     fit: BoxFit.cover,
@@ -221,22 +280,31 @@ jobs:
                     ),
                   ),
                 );
-              } else if (mediaSrc != null && mediaSrc != "") {
-                return Image.network(mediaSrc, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: Colors.black));
+              } else if (mediaSrc.isNotEmpty) {
+                return Image.network(
+                  mediaSrc, 
+                  fit: BoxFit.cover, 
+                  errorBuilder: (c, e, s) => Container(
+                    color: Colors.black,
+                    child: const Center(child: Icon(Icons.broken_image, color: Colors.white24, size: 64)),
+                  )
+                );
               }
               return Container(color: Colors.black);
             }
           }
           '@
           
-          # 去除每行多余的缩进并写入文件
+          # 缩进处理并写入文件
           $dartCode.Trim() -replace '(?m)^\s{10}', '' | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
 
       - name: 5. 注册资源与依赖
         shell: pwsh
         run: |
           cd player_app
+          # 显式添加最新版依赖
           flutter pub add video_player
+          # 在 pubspec.yaml 中正确注入 assets
           $content = Get-Content pubspec.yaml
           $newContent = $content -replace '# assets:', "assets:`n    - assets/movie_config.json"
           Set-Content pubspec.yaml $newContent
@@ -252,7 +320,9 @@ jobs:
         run: |
           if (Test-Path "output") { Remove-Item -Recurse -Force "output" }
           New-Item -ItemType Directory -Path "output"
+          # 拷贝编译后的二进制及其依赖 DLL
           Copy-Item "player_app/build/windows/x64/runner/Release/*" -Destination "output/" -Recurse
+          # 压缩
           Compress-Archive -Path "output/*" -DestinationPath "Douju_Player_Windows.zip" -Force
 
       - name: 8. 上传 Artifacts
