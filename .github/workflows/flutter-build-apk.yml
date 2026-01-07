@@ -1,0 +1,239 @@
+name: 📱 抖剧 Douju - Flutter APK 自动化打包
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch: {}
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 2. 设置 Java 环境
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 3. 安装 Flutter 环境
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 4. 初始化 Flutter Android 项目
+        run: |
+          flutter create --platforms=android player_app
+          cd player_app
+
+      - name: 5. 配置 Android 权限 (允许 HTTP 视频)
+        shell: pwsh
+        run: |
+          $manifestPath = "player_app/android/app/src/main/AndroidManifest.xml"
+          $manifest = Get-Content $manifestPath
+          # 注入 usesCleartextTraffic="true" 以支持 HTTP 视频源
+          $manifest = $manifest -replace '<application', '<application android:usesCleartextTraffic="true"'
+          Set-Content $manifestPath $manifest
+
+      - name: 6. 注入智能播放器引擎与数据
+        shell: pwsh
+        run: |
+          $assetsPath = "player_app/assets"
+          if (!(Test-Path $assetsPath)) { New-Item -ItemType Directory -Path $assetsPath }
+          
+          if (Test-Path "project.json") {
+              Copy-Item "project.json" -Destination "player_app/assets/movie_config.json" -Force
+          } else {
+              if (Test-Path "metadata.json") {
+                Copy-Item "metadata.json" -Destination "player_app/assets/movie_config.json" -Force
+              }
+          }
+          
+          # 写入兼容 Android 的播放器代码 (复用 Windows 优化逻辑)
+          $dartCode = @'
+          import 'dart:convert';
+          import 'dart:async';
+          import 'dart:io';
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:video_player/video_player.dart';
+
+          void main() {
+            HttpOverrides.global = MyHttpOverrides();
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const MovieApp());
+          }
+
+          class MyHttpOverrides extends HttpOverrides {
+            @override
+            HttpClient createHttpClient(SecurityContext? context) {
+              return super.createHttpClient(context)
+                ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+            }
+          }
+
+          class MovieApp extends StatelessWidget {
+            const MovieApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Douju Player Mobile',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  brightness: Brightness.dark,
+                  primaryColor: Colors.cyan,
+                  useMaterial3: true,
+                  scaffoldBackgroundColor: Colors.black,
+                ),
+                home: const MoviePlayer(),
+              );
+            }
+          }
+
+          class MoviePlayer extends StatefulWidget {
+            const MoviePlayer({super.key});
+            @override
+            State<MoviePlayer> createState() => _MoviePlayerState();
+          }
+
+          class _MoviePlayerState extends State<MoviePlayer> {
+            Map<String, dynamic>? project;
+            String? currentId;
+            VideoPlayerController? _videoController;
+            bool _isInitialized = false;
+            String? _errorMessage;
+            String _loadingStatus = "加载中...";
+            bool _isLoading = true;
+
+            @override
+            void initState() {
+              super.initState();
+              _loadProject();
+            }
+
+            @override
+            void dispose() {
+              _videoController?.dispose();
+              super.dispose();
+            }
+
+            Future<void> _loadProject() async {
+              try {
+                final String response = await rootBundle.loadString('assets/movie_config.json');
+                final data = await json.decode(response);
+                setState(() {
+                  project = data;
+                  currentId = 'start';
+                });
+                _setupMedia();
+              } catch (e) {
+                setState(() { _errorMessage = "配置加载失败"; _isLoading = false; });
+              }
+            }
+
+            Future<void> _setupMedia() async {
+              final nodes = project?['nodes'] as Map<String, dynamic>?;
+              final node = nodes?[currentId];
+              if (node == null) return;
+
+              setState(() { 
+                _isInitialized = false; 
+                _isLoading = true; 
+                _errorMessage = null; 
+                _loadingStatus = "正在建立连接...";
+              });
+
+              await _videoController?.dispose();
+              _videoController = null;
+
+              String mediaSrc = (node['mediaSrc'] ?? '').toString();
+              if (mediaSrc.isNotEmpty) {
+                try {
+                  _videoController = VideoPlayerController.networkUrl(Uri.parse(mediaSrc));
+                  await _videoController!.initialize().timeout(const Duration(seconds: 15));
+                  await _videoController!.setLooping(true);
+                  await _videoController!.play();
+                  if (mounted) setState(() { _isInitialized = true; _isLoading = false; });
+                } catch (e) {
+                  if (mounted) setState(() { _isLoading = false; _errorMessage = "媒体解析失败，请检查网络"; });
+                }
+              } else {
+                setState(() { _isLoading = false; });
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              final nodes = project!['nodes'] as Map<String, dynamic>;
+              final node = nodes[currentId];
+              if (node == null) return const Scaffold(body: Center(child: Text('FINISH')));
+
+              return Scaffold(
+                backgroundColor: Colors.black,
+                body: Stack(
+                  children: [
+                    if (_isInitialized) 
+                      SizedBox.expand(child: FittedBox(fit: BoxFit.cover, child: SizedBox(width: _videoController!.value.size.width, height: _videoController!.value.size.height, child: VideoPlayer(_videoController!)))),
+                    
+                    Positioned.fill(child: Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black26, Colors.black87])))),
+
+                    SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_isLoading) LinearProgressIndicator(backgroundColor: Colors.white10, color: Colors.cyanAccent),
+                            const Spacer(),
+                            Text(node['title'] ?? '', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+                            const SizedBox(height: 16),
+                            Text(node['content'] ?? '', style: const TextStyle(fontSize: 16, color: Colors.white70, height: 1.6)),
+                            const SizedBox(height: 32),
+                            Wrap(
+                              spacing: 12, runSpacing: 12,
+                              children: (node['options'] as List? ?? []).map((opt) => ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.white10, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16), side: BorderSide(color: Colors.white24)),
+                                onPressed: () {
+                                  setState(() { currentId = opt['targetId']; });
+                                  _setupMedia();
+                                },
+                                child: Text(opt['label'] ?? ''),
+                              )).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          '@
+          
+          $dartCode.Trim() -replace '(?m)^\s{10}', '' | Out-File -FilePath "player_app/lib/main.dart" -Encoding utf8
+
+      - name: 7. 注册资源与依赖
+        run: |
+          cd player_app
+          flutter pub add video_player
+          sed -i 's/# assets:/assets:\n    - assets\/movie_config.json/g' pubspec.yaml
+
+      - name: 8. 编译 Release APK
+        run: |
+          cd player_app
+          flutter pub get
+          flutter build apk --release
+
+      - name: 9. 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Douju-Android-APK
+          path: player_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
